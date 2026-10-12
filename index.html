@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Call App</title>
+  <style>
+    body { font-family: Segoe UI; background:#e8e8e8; color:#1a1a1a;
+           text-align:center; padding:40px; }
+    button { font-size:20px; padding:15px 30px; margin:10px;
+             background:#5a7fa8; color:white; border:none;
+             border-radius:8px; cursor:pointer; }
+    button:hover { background:#4a6f98; }
+    button.red { background:#a85a5a; }
+    button.green { background:#5aa85a; }
+    input { font-size:16px; padding:10px; width:260px;
+            border:1px solid #ccc; border-radius:6px; }
+    #status { margin-top:20px; font-size:18px; color:#4a4a4a; }
+    #incoming { display:none; margin-top:20px; padding:20px;
+                background:#fff3cd; border-radius:10px; }
+  </style>
+</head>
+<body>
+  <h1>Call App</h1>
+
+  <input id="room" placeholder="Enter room name" value="test">
+  <br><br>
+  <button onclick="join()">Join Room</button>
+  <button onclick="call()" id="callBtn" disabled>Call</button>
+  <button onclick="hangup()" id="hangBtn" disabled class="red">Hang Up</button>
+
+  <div id="status">Not connected.</div>
+
+  <div id="incoming">
+    <b>Incoming call…</b><br><br>
+    <button onclick="acceptCall()" class="green">Accept</button>
+    <button onclick="rejectCall()" class="red">Reject</button>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    let localStream, peer, room, pendingOffer;
+
+    socket.on('user-joined', () => {
+      setStatus('Other user joined. Click Call.');
+      document.getElementById('callBtn').disabled = false;
+    });
+
+    socket.on('offer', async ({ offer }) => {
+      pendingOffer = offer;
+      document.getElementById('incoming').style.display = 'block';
+      setStatus('Ringing…');
+    });
+
+    socket.on('answer', async ({ answer }) => {
+      await peer.setRemoteDescription(answer);
+      setStatus('In call.');
+      document.getElementById('hangBtn').disabled = false;
+    });
+
+    socket.on('ice-candidate', async ({ candidate }) => {
+      if (peer) await peer.addIceCandidate(candidate);
+    });
+
+    function setStatus(t) { document.getElementById('status').innerText = t; }
+
+    async function ensureStream() {
+      if (!localStream)
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+
+    function join() {
+      room = document.getElementById('room').value.trim();
+      socket.emit('join', room);
+      setStatus('Joined ' + room + '. Waiting…');
+    }
+
+    async function call() {
+      await ensureStream();
+      peer = new RTCPeerConnection();
+      localStream.getTracks().forEach(t => peer.addTrack(t, localStream));
+      peer.ontrack = e => new Audio(e.streams[0]);
+      peer.onicecandidate = e => e.candidate &&
+        socket.emit('ice-candidate', { room, candidate: e.candidate });
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      socket.emit('offer', { room, offer });
+      setStatus('Calling… waiting for answer.');
+    }
+
+    async function acceptCall() {
+      document.getElementById('incoming').style.display = 'none';
+      await ensureStream();
+      peer = new RTCPeerConnection();
+      localStream.getTracks().forEach(t => peer.addTrack(t, localStream));
+      peer.ontrack = e => new Audio(e.streams[0]);
+      peer.onicecandidate = e => e.candidate &&
+        socket.emit('ice-candidate', { room, candidate: e.candidate });
+      await peer.setRemoteDescription(pendingOffer);
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      socket.emit('answer', { room, answer });
+      setStatus('In call.');
+      document.getElementById('hangBtn').disabled = false;
+    }
+
+    function rejectCall() {
+      document.getElementById('incoming').style.display = 'none';
+      setStatus('Call rejected.');
+      pendingOffer = null;
+    }
+
+    function hangup() {
+      if (peer) peer.close();
+      if (localStream) localStream.getTracks().forEach(t => t.stop());
+      peer = null; localStream = null; pendingOffer = null;
+      setStatus('Call ended.');
+      document.getElementById('hangBtn').disabled = true;
+    }
+  </script>
+</body>
+</html>
